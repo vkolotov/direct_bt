@@ -85,6 +85,94 @@ public final class EInfoReport implements AutoCloseable, Cloneable
     }
 
     /**
+     * Advertising (AD) or (Extended) Inquiry Response (EIR) event/PDU type, mirroring the native
+     * {@code AD_PDU_Type}. Encodes whether the advertising device is connectable (see {@link #isConnectable()}).
+     */
+    public enum AD_PDU_Type {
+        /** Advertising Indications (ADV_IND), connectable and scannable undirected. */
+        ADV_IND( 0x00 ),
+        /** Connectable directed (ADV_DIRECT_IND). */
+        ADV_DIRECT_IND( 0x01 ),
+        /** Scannable, non-connectable undirected (ADV_SCAN_IND). */
+        ADV_SCAN_IND( 0x02 ),
+        /** Non-connectable, non-scannable undirected (ADV_NONCONN_IND). */
+        ADV_NONCONN_IND( 0x03 ),
+        /** Scan response PDU type. */
+        SCAN_RSP( 0x04 ),
+        /** LEGACY_PDU: ADV_IND variant. */
+        ADV_IND2( 0b0010011 ),
+        /** LEGACY_PDU: ADV_DIRECT_IND variant. */
+        DIRECT_IND2( 0b0010101 ),
+        /** LEGACY_PDU: ADV_SCAN_IND variant. */
+        SCAN_IND2( 0b0010010 ),
+        /** LEGACY_PDU: ADV_NONCONN_IND variant. */
+        NONCONN_IND2( 0b0010000 ),
+        /** LEGACY_PDU: SCAN_RSP variant to an ADV_IND. */
+        SCAN_RSP_to_ADV_IND( 0b0011011 ),
+        /** LEGACY_PDU: SCAN_RSP variant to an ADV_SCAN_IND. */
+        SCAN_RSP_to_ADV_SCAN_IND( 0b0011010 ),
+        /** Undefined / unavailable. */
+        UNDEFINED( 0xff );
+
+        AD_PDU_Type(final int v) {
+            value = v;
+        }
+        public final int value;
+
+        /**
+         * Maps the specified integer value to a constant of {@link AD_PDU_Type}.
+         * @param value the integer value to be mapped to a constant of this enum type.
+         * @return the corresponding constant of this enum type, using {@link #UNDEFINED} if not supported.
+         */
+        public static AD_PDU_Type get(final int value) {
+            for (final AD_PDU_Type t : AD_PDU_Type.values()) {
+                if (t.value == value) {
+                    return t;
+                }
+            }
+            return UNDEFINED;
+        }
+
+        /**
+         * Returns {@code true} if this event type indicates a connectable advertising device, i.e. one of the
+         * ADV_IND / ADV_DIRECT_IND variants (including their LEGACY_PDU forms and a scan response to an ADV_IND).
+         * The non-connectable beacon types (ADV_SCAN_IND / ADV_NONCONN_IND) return {@code false}.
+         */
+        public boolean isConnectable() {
+            switch(this) {
+                case ADV_IND:
+                case ADV_DIRECT_IND:
+                case ADV_IND2:
+                case DIRECT_IND2:
+                case SCAN_RSP_to_ADV_IND:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /**
+         * Returns {@code true} only for event types that definitively indicate a non-connectable device
+         * (the ADV_SCAN_IND / ADV_NONCONN_IND variants). Types that carry no connectability information
+         * (e.g. a bare {@link #SCAN_RSP} or {@link #UNDEFINED}) return {@code false} here as well as in
+         * {@link #isConnectable()} — callers should treat "neither connectable nor non-connectable" as unknown
+         * and not downgrade a previously observed connectable state.
+         */
+        public boolean isNonConnectable() {
+            switch(this) {
+                case ADV_SCAN_IND:
+                case ADV_NONCONN_IND:
+                case SCAN_IND2:
+                case NONCONN_IND2:
+                case SCAN_RSP_to_ADV_SCAN_IND:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    }
+
+    /**
      * New independent EInfoReport instance
      */
     public EInfoReport() {
@@ -211,7 +299,14 @@ public final class EInfoReport implements AutoCloseable, Cloneable
 
     public final boolean isSet(final EIRDataTypeSet.DataType bit) { return getEIRDataMask().isSet(bit); }
 
-    // public native AD_PDU_Type getEvtType();
+    /**
+     * Returns the advertising event/PDU type ({@link AD_PDU_Type}) of this report, or
+     * {@link AD_PDU_Type#UNDEFINED} if not set. Use {@link AD_PDU_Type#isConnectable()} to test connectability.
+     */
+    public final AD_PDU_Type getEvtType() {
+        return AD_PDU_Type.get( getEvtTypeImpl() );
+    }
+    private native int getEvtTypeImpl();
     // public native EAD_Event_Type getExtEvtType();
     public final GAPFlags getFlags() {
         return new GAPFlags(getFlagsImpl());
