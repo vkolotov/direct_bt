@@ -364,6 +364,21 @@ jint Java_org_direct_1bt_EInfoReport_getSourceImpl(JNIEnv *env, jobject obj) {
 
 /*
  * Class:     org_direct_bt_EInfoReport
+ * Method:    getEvtTypeImpl
+ * Signature: ()I
+ */
+jint Java_org_direct_1bt_EInfoReport_getEvtTypeImpl(JNIEnv *env, jobject obj) {
+    try {
+        shared_ptr_ref<EInfoReport> ref(env, obj); // hold until done
+        return static_cast<jint>( number( ref->getEvtType() ) );
+    } catch(...) {
+        rethrow_and_raise_java_exception(env);
+    }
+    return static_cast<jint>( number( AD_PDU_Type::UNDEFINED ) );
+}
+
+/*
+ * Class:     org_direct_bt_EInfoReport
  * Method:    getFlagsImpl
  * Signature: ()B
  */
