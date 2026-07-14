@@ -72,9 +72,14 @@ jobject Java_jau_direct_1bt_DBTGattService_getCharsImpl(JNIEnv *env, jobject obj
     try {
         shared_ptr_ref<BTGattService> service(env, obj); // hold until done
         JavaAnonRef service_java = service->getJavaObject(); // hold until done!
+        if( !JavaGlobalObj::isValid(service_java) ) {
+            ERR_PRINT("DBTGattService.getCharsImpl: invalid Java service object: %s", service->toString().c_str());
+        }
         JavaGlobalObj::check(service_java, E_FILE_LINE);
 
         jau::darray<std::shared_ptr<BTGattChar>> & characteristics = service->characteristicList;
+        DBG_PRINT("DBTGattService.getCharsImpl: service has %zu chars: %s",
+                characteristics.size(), service->toString().c_str());
 
         jclass gattCharPropSetClazz;
         jmethodID gattCharPropSetClazzCtor;
@@ -107,6 +112,10 @@ jobject Java_jau_direct_1bt_DBTGattService_getCharsImpl(JNIEnv *env, jobject obj
                         throw jau::RuntimeException("Characteristic's service null: "+characteristic->toString(), E_FILE_LINE);
                     }
                     JavaAnonRef _service_java = _service->getJavaObject(); // hold until done!
+                    if( !JavaGlobalObj::isValid(_service_java) ) {
+                        ERR_PRINT("DBTGattService.getCharsImpl: invalid Java service object while creating char %s in %s",
+                                characteristic->toString().c_str(), _service->toString().c_str());
+                    }
                     JavaGlobalObj::check(_service_java, E_FILE_LINE);
 
                     jobject jservice = JavaGlobalObj::GetObject(_service_java);
@@ -126,8 +135,16 @@ jobject Java_jau_direct_1bt_DBTGattService_getCharsImpl(JNIEnv *env, jobject obj
                             characteristic->clientCharConfigIndex,
                             characteristic->userDescriptionIndex);
                     java_exception_check_and_throw(env_, E_FILE_LINE);
+                    if( nullptr == jcharVal ) {
+                        ERR_PRINT("DBTGattService.getCharsImpl: NewObject returned null for char %s in %s",
+                                characteristic->toString().c_str(), _service->toString().c_str());
+                    }
                     JNIGlobalRef::check(jcharVal, E_FILE_LINE);
                     JavaAnonRef jCharRef = characteristic->getJavaObject(); // GlobalRef
+                    if( !JavaGlobalObj::isValid(jCharRef) ) {
+                        ERR_PRINT("DBTGattService.getCharsImpl: invalid Java char object after ctor: %s in %s",
+                                characteristic->toString().c_str(), _service->toString().c_str());
+                    }
                     JavaGlobalObj::check(jCharRef, E_FILE_LINE);
                     env_->DeleteLocalRef(jGattCharPropSet);
                     env_->DeleteLocalRef(jcharVal);

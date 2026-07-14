@@ -947,9 +947,15 @@ jobject Java_jau_direct_1bt_DBTDevice_getGattServicesImpl(JNIEnv *env, jobject o
     try {
         shared_ptr_ref<BTDevice> device(env, obj); // hold until done
         JavaAnonRef device_java = device->getJavaObject(); // hold until done!
+        if( !JavaGlobalObj::isValid(device_java) ) {
+            ERR_PRINT("DBTDevice.getGattServicesImpl: invalid Java device object before discovery: %s",
+                    device->toString().c_str());
+        }
         JavaGlobalObj::check(device_java, E_FILE_LINE);
 
         jau::darray<BTGattServiceRef> services = device->getGattServices(); // implicit GATT connect and discovery if required incl GenericAccess retrieval
+        DBG_PRINT("DBTDevice.getGattServicesImpl: discovered %zu services: %s",
+                services.size(), device->toString().c_str());
         if( services.size() == 0 ) {
             return nullptr;
         }
@@ -965,6 +971,10 @@ jobject Java_jau_direct_1bt_DBTDevice_getGattServicesImpl(JNIEnv *env, jobject o
                         throw jau::RuntimeException("Service's device null: "+service->toString(), E_FILE_LINE);
                     }
                     JavaAnonRef _device_java = _device->getJavaObject(); // hold until done!
+                    if( !JavaGlobalObj::isValid(_device_java) ) {
+                        ERR_PRINT("DBTDevice.getGattServicesImpl: invalid Java device object while creating service %s on %s",
+                                service->toString().c_str(), _device->toString().c_str());
+                    }
                     JavaGlobalObj::check(_device_java, E_FILE_LINE);
                     jobject jdevice = JavaGlobalObj::GetObject(_device_java);
 
@@ -976,8 +986,16 @@ jobject Java_jau_direct_1bt_DBTDevice_getGattServicesImpl(JNIEnv *env, jobject o
                     jobject jservice = env_->NewObject(clazz, clazz_ctor, service_sref.release_to_jlong(), jdevice, isPrimary,
                             juuid, service->handle, service->end_handle);
                     java_exception_check_and_throw(env_, E_FILE_LINE);
+                    if( nullptr == jservice ) {
+                        ERR_PRINT("DBTDevice.getGattServicesImpl: NewObject returned null for service %s on %s",
+                                service->toString().c_str(), _device->toString().c_str());
+                    }
                     JNIGlobalRef::check(jservice, E_FILE_LINE);
                     JavaAnonRef jServiceRef = service->getJavaObject(); // GlobalRef
+                    if( !JavaGlobalObj::isValid(jServiceRef) ) {
+                        ERR_PRINT("DBTDevice.getGattServicesImpl: invalid Java service object after ctor: %s on %s",
+                                service->toString().c_str(), _device->toString().c_str());
+                    }
                     JavaGlobalObj::check(jServiceRef, E_FILE_LINE);
                     env_->DeleteLocalRef(juuid);
                     env_->DeleteLocalRef(jservice);

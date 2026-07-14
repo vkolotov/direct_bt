@@ -417,7 +417,8 @@ bool BTGattHandler::replyAttPDUReq(std::unique_ptr<const AttPDUMsg> && pdu) noex
 void BTGattHandler::l2capReaderWork(jau::service_runner& sr) noexcept {
     jau::snsize_t len;
     if( !validateConnected() ) {
-        DBG_PRINT("GATTHandler::reader: Invalid IO state -> Stop");
+        DBG_PRINT("GATTHandler::reader: Invalid IO state -> Stop: %s, l2cap[%s]",
+                  toString().c_str(), l2cap.getStateString().c_str());
         sr.set_shall_stop();
         return;
     }
@@ -538,8 +539,9 @@ void BTGattHandler::l2capReaderWork(jau::service_runner& sr) noexcept {
             ERR_PRINT("Unhandled: %s", attPDU->toString().c_str());
         }
     } else if( len == L2CAPClient::number(L2CAPClient::RWExitCode::INTERRUPTED) ) {
-        WORDY_PRINT("GATTHandler::reader: l2cap read: IRQed res %d (%s); %s",
-                len, L2CAPClient::getRWExitCodeString(len).c_str(), getStateString().c_str());
+        WORDY_PRINT("GATTHandler::reader: l2cap read: IRQed res %d (%s); %s, l2cap[%s]",
+                len, L2CAPClient::getRWExitCodeString(len).c_str(), toString().c_str(),
+                l2cap.getStateString().c_str());
         if( !sr.shall_stop() ) {
             // need to stop service_runner if interrupted externally
             sr.set_shall_stop();
@@ -547,20 +549,23 @@ void BTGattHandler::l2capReaderWork(jau::service_runner& sr) noexcept {
     } else if( len != L2CAPClient::number(L2CAPClient::RWExitCode::POLL_TIMEOUT) &&
                len != L2CAPClient::number(L2CAPClient::RWExitCode::READ_TIMEOUT) ) { // expected TIMEOUT if idle
         if( 0 > len ) { // actual error case
-            IRQ_PRINT("GATTHandler::reader: l2cap read: Error res %d (%s); %s",
-                    len, L2CAPClient::getRWExitCodeString(len).c_str(), getStateString().c_str());
+            IRQ_PRINT("GATTHandler::reader: l2cap read: Error res %d (%s); %s, l2cap[%s]",
+                    len, L2CAPClient::getRWExitCodeString(len).c_str(), toString().c_str(),
+                    l2cap.getStateString().c_str());
             sr.set_shall_stop();
             has_ioerror = true;
         } else { // zero size
-            WORDY_PRINT("GATTHandler::reader: l2cap read: Zero res %d (%s); %s",
-                    len, L2CAPClient::getRWExitCodeString(len).c_str(), getStateString().c_str());
+            WORDY_PRINT("GATTHandler::reader: l2cap read: Zero res %d (%s); %s, l2cap[%s]",
+                    len, L2CAPClient::getRWExitCodeString(len).c_str(), toString().c_str(),
+                    l2cap.getStateString().c_str());
         }
     }
 }
 
 void BTGattHandler::l2capReaderEndLocked(jau::service_runner& sr) noexcept {
     (void)sr;
-    WORDY_PRINT("GATTHandler::reader: EndLocked. Ring has %u entries flushed: %s", attPDURing.size(), toString().c_str());
+    WORDY_PRINT("GATTHandler::reader: EndLocked. Ring has %u entries flushed: %s, l2cap[%s]",
+                attPDURing.size(), toString().c_str(), l2cap.getStateString().c_str());
     attPDURing.clear();
 #if 0
     // Disabled: BT host is sending out disconnect -> simplify tear down
@@ -621,7 +626,8 @@ BTGattHandler::BTGattHandler(const BTDeviceRef &device, L2CAPClient& l2cap_att, 
     l2cap.set_interrupted_query( jau::bind_member(this, &BTGattHandler::l2capReaderInterrupted) );
     l2cap_reader_service.start();
 
-    DBG_PRINT("GATTHandler::ctor: Started: GattHandler[%s], l2cap[%s]: %s",
+    DBG_PRINT("GATTHandler::ctor: Started: supervision %d ms, timeout[read %" PRIi64 " ms, write %" PRIi64 " ms], GattHandler[%s], l2cap[%s]: %s",
+                supervision_timeout, read_cmd_reply_timeout.to_ms(), write_cmd_reply_timeout.to_ms(),
                 getStateString().c_str(), l2cap.getStateString().c_str(), toString().c_str());
 
     if( GATTRole::Client == getRole() ) {
@@ -675,12 +681,21 @@ bool BTGattHandler::disconnect(const bool disconnect_device, const bool ioerr_ca
         return false;
     }
     PERF3_TS_T0();
+    DBG_PRINT("GATTHandler::disconnect: Enter: disconnect_device %d, ioerr %d: %s, l2cap[%s], deviceConnected %d",
+              disconnect_device, ioerr_cause, toString().c_str(), l2cap.getStateString().c_str(),
+              device->getConnected());
 
     // Avoid disconnect re-entry -> potential deadlock
     bool expConn = true; // C++11, exp as value since C++20
     if( !is_connected.compare_exchange_strong(expConn, false) ) {
         // not connected
+        DBG_PRINT("GATTHandler::disconnect: Not connected path before join: disconnect_device %d, ioerr %d: %s, l2cap[%s], deviceConnected %d",
+                  disconnect_device, ioerr_cause, toString().c_str(), l2cap.getStateString().c_str(),
+                  device->getConnected());
         const bool l2cap_service_stopped = l2cap_reader_service.join(); // [data] race: wait until disconnecting thread has stopped service
+        DBG_PRINT("GATTHandler::disconnect: Not connected path after join before close: stopped %d: %s, l2cap[%s], deviceConnected %d",
+                  l2cap_service_stopped, toString().c_str(), l2cap.getStateString().c_str(),
+                  device->getConnected());
         l2cap.close(); // owned by BTDevice.
         DBG_PRINT("GATTHandler::disconnect: Not connected: disconnect_device %d, ioerr %d: GattHandler[%s], l2cap[%s], stopped %d: %s",
                   disconnect_device, ioerr_cause, getStateString().c_str(), l2cap.getStateString().c_str(),
@@ -691,8 +706,16 @@ bool BTGattHandler::disconnect(const bool disconnect_device, const bool ioerr_ca
     }
 
     PERF3_TS_TD("GATTHandler::disconnect.1");
+    DBG_PRINT("GATTHandler::disconnect: Connected path before service stop: %s, l2cap[%s], deviceConnected %d",
+              toString().c_str(), l2cap.getStateString().c_str(), device->getConnected());
     const bool l2cap_service_stop_res = l2cap_reader_service.stop();
+    DBG_PRINT("GATTHandler::disconnect: Connected path after service stop before close: stopped %d: %s, l2cap[%s], deviceConnected %d",
+              l2cap_service_stop_res, toString().c_str(), l2cap.getStateString().c_str(),
+              device->getConnected());
     l2cap.close(); // owned by BTDevice.
+    DBG_PRINT("GATTHandler::disconnect: Connected path after l2cap close: stopped %d: %s, l2cap[%s], deviceConnected %d",
+              l2cap_service_stop_res, toString().c_str(), l2cap.getStateString().c_str(),
+              device->getConnected());
     PERF3_TS_TD("GATTHandler::disconnect.X");
 
     gattServerHandler->close();
@@ -768,7 +791,8 @@ std::unique_ptr<const AttPDUMsg> BTGattHandler::sendWithReply(const AttPDUMsg & 
     std::unique_ptr<const AttPDUMsg> res;
     if( !attPDURing.getBlocking(res, timeout) || nullptr == res ) {
         errno = ETIMEDOUT;
-        ERR_PRINT("GATTHandler::sendWithReply: nullptr result (timeout %" PRIi64 " ms): req %s to %s", timeout.to_ms(), msg.toString().c_str(), toString().c_str());
+        ERR_PRINT("GATTHandler::sendWithReply: nullptr result (timeout %" PRIi64 " ms): req %s to %s, l2cap[%s]",
+                  timeout.to_ms(), msg.toString().c_str(), toString().c_str(), l2cap.getStateString().c_str());
         has_ioerror = true;
         disconnect(true /* disconnect_device */, true /* ioerr_cause */);
         return nullptr;
@@ -1582,9 +1606,12 @@ std::shared_ptr<GattDeviceInformationSvc> BTGattHandler::getDeviceInformation(ja
 }
 
 std::string BTGattHandler::toString() const noexcept {
-    return "GattHndlr["+to_string(getRole())+", "+deviceString+
+    return "GattHndlr["+jau::to_hexstring((void*)this)+", "+to_string(getRole())+", "+deviceString+
            ", mode "+to_string(gattServerHandler->getMode())+
            ", mtu "+std::to_string(usedMTU.load())+
+           ", timeout[read "+std::to_string(read_cmd_reply_timeout.to_ms())+
+           "ms, write "+std::to_string(write_cmd_reply_timeout.to_ms())+
+           "ms, supervision "+std::to_string(supervision_timeout)+"ms]"+
            ", listener[BTGatt "+std::to_string(gattCharListenerList.size())+
            ", Native "+std::to_string(nativeGattCharListenerList.size())+
            "], l2capWorker[running "+std::to_string(l2cap_reader_service.is_running())+

@@ -120,6 +120,9 @@ jbyteArray Java_jau_direct_1bt_DBTGattChar_readValueImpl(JNIEnv *env, jobject ob
     try {
         shared_ptr_ref<BTGattChar> characteristic(env, obj); // hold until done
         JavaAnonRef characteristic_java = characteristic->getJavaObject(); // hold until done!
+        if( !JavaGlobalObj::isValid(characteristic_java) ) {
+            ERR_PRINT("DBTGattChar.readValueImpl: invalid Java object before read: %s", characteristic->toString().c_str());
+        }
         JavaGlobalObj::check(characteristic_java, E_FILE_LINE);
 
         jau::POctets res(BTGattHandler::number(BTGattHandler::Defaults::MAX_ATT_MTU), 0, jau::lb_endian_t::little);
@@ -144,6 +147,10 @@ jboolean Java_jau_direct_1bt_DBTGattChar_writeValueImpl(JNIEnv *env, jobject obj
     try {
         shared_ptr_ref<BTGattChar> characteristic(env, obj); // hold until done
         JavaAnonRef characteristic_java = characteristic->getJavaObject(); // hold until done!
+        if( !JavaGlobalObj::isValid(characteristic_java) ) {
+            ERR_PRINT("DBTGattChar.writeValueImpl: invalid Java object before write(withResponse %d): %s",
+                    withResponse, characteristic->toString().c_str());
+        }
         JavaGlobalObj::check(characteristic_java, E_FILE_LINE);
 
         if( nullptr == jval ) {
