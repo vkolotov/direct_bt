@@ -954,7 +954,7 @@ jobject Java_jau_direct_1bt_DBTDevice_getGattServicesImpl(JNIEnv *env, jobject o
         JavaGlobalObj::check(device_java, E_FILE_LINE);
 
         jau::darray<BTGattServiceRef> services = device->getGattServices(); // implicit GATT connect and discovery if required incl GenericAccess retrieval
-        DBG_PRINT("DBTDevice.getGattServicesImpl: discovered %zu services: %s",
+        WARN_PRINT("DBTDevice.getGattServicesImpl: discovered %zu services: %s",
                 services.size(), device->toString().c_str());
         if( services.size() == 0 ) {
             return nullptr;
@@ -965,41 +965,66 @@ jobject Java_jau_direct_1bt_DBTDevice_getGattServicesImpl(JNIEnv *env, jobject o
 
         jau::function<jobject(JNIEnv*, jclass, jmethodID, const BTGattServiceRef&)> ctor_service =
                 [](JNIEnv *env_, jclass clazz, jmethodID clazz_ctor, const BTGattServiceRef& service)->jobject {
+                    WARN_PRINT("DBTDevice.getGattServicesImpl: ctor begin service native %p: %s",
+                            service.get(), nullptr != service ? service->toString().c_str() : "null");
                     // prepare adapter ctor
                     std::shared_ptr<BTDevice> _device = service->getDeviceUnchecked();
                     if( nullptr == _device ) {
                         throw jau::RuntimeException("Service's device null: "+service->toString(), E_FILE_LINE);
                     }
+                    WARN_PRINT("DBTDevice.getGattServicesImpl: ctor service native %p belongs to device native %p: %s",
+                            service.get(), _device.get(), _device->toString().c_str());
                     JavaAnonRef _device_java = _device->getJavaObject(); // hold until done!
                     if( !JavaGlobalObj::isValid(_device_java) ) {
                         ERR_PRINT("DBTDevice.getGattServicesImpl: invalid Java device object while creating service %s on %s",
                                 service->toString().c_str(), _device->toString().c_str());
                     }
+                    WARN_PRINT("DBTDevice.getGattServicesImpl: checking Java device object for service native %p: %s",
+                            service.get(), service->toString().c_str());
                     JavaGlobalObj::check(_device_java, E_FILE_LINE);
                     jobject jdevice = JavaGlobalObj::GetObject(_device_java);
+                    WARN_PRINT("DBTDevice.getGattServicesImpl: Java device object %p for service native %p",
+                            jdevice, service.get());
 
                     const jboolean isPrimary = service->primary;
                     const jstring juuid = from_string_to_jstring(env_, service->type->toUUID128String());
                     java_exception_check_and_throw(env_, E_FILE_LINE);
+                    WARN_PRINT("DBTDevice.getGattServicesImpl: Java UUID object %p for service native %p uuid %s handle 0x%04x end 0x%04x primary %d chars %zu",
+                            juuid, service.get(), service->type->toUUID128String().c_str(),
+                            service->handle, service->end_handle, isPrimary, service->characteristicList.size());
 
                     shared_ptr_ref<BTGattService> service_sref(service); // new instance to be released into new jobject
-                    jobject jservice = env_->NewObject(clazz, clazz_ctor, service_sref.release_to_jlong(), jdevice, isPrimary,
+                    const jlong native_handle = service_sref.release_to_jlong();
+                    WARN_PRINT("DBTDevice.getGattServicesImpl: NewObject begin service native %p exported handle 0x%llx: %s",
+                            service.get(), (long long)native_handle, service->toString().c_str());
+                    jobject jservice = env_->NewObject(clazz, clazz_ctor, native_handle, jdevice, isPrimary,
                             juuid, service->handle, service->end_handle);
                     java_exception_check_and_throw(env_, E_FILE_LINE);
+                    WARN_PRINT("DBTDevice.getGattServicesImpl: NewObject returned %p for service native %p exported handle 0x%llx",
+                            jservice, service.get(), (long long)native_handle);
                     if( nullptr == jservice ) {
                         ERR_PRINT("DBTDevice.getGattServicesImpl: NewObject returned null for service %s on %s",
                                 service->toString().c_str(), _device->toString().c_str());
                     }
+                    WARN_PRINT("DBTDevice.getGattServicesImpl: checking Java service local ref %p for service native %p",
+                            jservice, service.get());
                     JNIGlobalRef::check(jservice, E_FILE_LINE);
                     JavaAnonRef jServiceRef = service->getJavaObject(); // GlobalRef
+                    WARN_PRINT("DBTDevice.getGattServicesImpl: native service %p getJavaObject valid %d: %s",
+                            service.get(), JavaGlobalObj::isValid(jServiceRef), service->toString().c_str());
                     if( !JavaGlobalObj::isValid(jServiceRef) ) {
                         ERR_PRINT("DBTDevice.getGattServicesImpl: invalid Java service object after ctor: %s on %s",
                                 service->toString().c_str(), _device->toString().c_str());
                     }
+                    WARN_PRINT("DBTDevice.getGattServicesImpl: checking Java service global ref for native %p",
+                            service.get());
                     JavaGlobalObj::check(jServiceRef, E_FILE_LINE);
                     env_->DeleteLocalRef(juuid);
                     env_->DeleteLocalRef(jservice);
-                    return JavaGlobalObj::GetObject(jServiceRef);
+                    jobject res = JavaGlobalObj::GetObject(jServiceRef);
+                    WARN_PRINT("DBTDevice.getGattServicesImpl: ctor end service native %p -> Java object %p",
+                            service.get(), res);
+                    return res;
                 };
         return convert_vector_sharedptr_to_jarraylist<jau::darray<BTGattServiceRef>, BTGattService>(
                 env, services, _serviceClazzCtorArgs.c_str(), ctor_service);

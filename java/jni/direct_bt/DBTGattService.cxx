@@ -78,7 +78,7 @@ jobject Java_jau_direct_1bt_DBTGattService_getCharsImpl(JNIEnv *env, jobject obj
         JavaGlobalObj::check(service_java, E_FILE_LINE);
 
         jau::darray<std::shared_ptr<BTGattChar>> & characteristics = service->characteristicList;
-        DBG_PRINT("DBTGattService.getCharsImpl: service has %zu chars: %s",
+        WARN_PRINT("DBTGattService.getCharsImpl: service has %zu chars: %s",
                 characteristics.size(), service->toString().c_str());
 
         jclass gattCharPropSetClazz;
@@ -106,49 +106,77 @@ jobject Java_jau_direct_1bt_DBTGattService_getCharsImpl(JNIEnv *env, jobject obj
         */
         jau::function<jobject(JNIEnv*, jclass, jmethodID, const BTGattCharRef&)> ctor_char =
                 [&gattCharPropSetClazz, &gattCharPropSetClazzCtor](JNIEnv *env_, jclass clazz, jmethodID clazz_ctor, const BTGattCharRef& characteristic)->jobject {
+                    WARN_PRINT("DBTGattService.getCharsImpl: ctor begin char native %p: %s",
+                            characteristic.get(), nullptr != characteristic ? characteristic->toString().c_str() : "null");
                     // prepare adapter ctor
                     std::shared_ptr<BTGattService> _service = characteristic->getServiceUnchecked();
                     if( nullptr == _service ) {
                         throw jau::RuntimeException("Characteristic's service null: "+characteristic->toString(), E_FILE_LINE);
                     }
+                    WARN_PRINT("DBTGattService.getCharsImpl: ctor char native %p belongs to service native %p: %s",
+                            characteristic.get(), _service.get(), _service->toString().c_str());
                     JavaAnonRef _service_java = _service->getJavaObject(); // hold until done!
                     if( !JavaGlobalObj::isValid(_service_java) ) {
                         ERR_PRINT("DBTGattService.getCharsImpl: invalid Java service object while creating char %s in %s",
                                 characteristic->toString().c_str(), _service->toString().c_str());
                     }
+                    WARN_PRINT("DBTGattService.getCharsImpl: checking Java service object for char native %p: %s",
+                            characteristic.get(), characteristic->toString().c_str());
                     JavaGlobalObj::check(_service_java, E_FILE_LINE);
 
                     jobject jservice = JavaGlobalObj::GetObject(_service_java);
+                    WARN_PRINT("DBTGattService.getCharsImpl: Java service object %p for char native %p",
+                            jservice, characteristic.get());
 
                     jobject jGattCharPropSet = env_->NewObject(gattCharPropSetClazz, gattCharPropSetClazzCtor, (jbyte)characteristic->properties);
                     java_exception_check_and_throw(env_, E_FILE_LINE);
+                    WARN_PRINT("DBTGattService.getCharsImpl: Java property object %p for char native %p props 0x%02x",
+                            jGattCharPropSet, characteristic.get(), (unsigned int)characteristic->properties);
                     JNIGlobalRef::check(jGattCharPropSet, E_FILE_LINE);
                     java_exception_check_and_throw(env_, E_FILE_LINE);
 
                     const jstring uuid = from_string_to_jstring(env_, characteristic->value_type->toUUID128String());
                     java_exception_check_and_throw(env_, E_FILE_LINE);
+                    WARN_PRINT("DBTGattService.getCharsImpl: Java UUID object %p for char native %p uuid %s handle 0x%04x value_handle 0x%04x cccd %d user_desc %d",
+                            uuid, characteristic.get(), characteristic->value_type->toUUID128String().c_str(),
+                            characteristic->handle, characteristic->value_handle,
+                            characteristic->clientCharConfigIndex, characteristic->userDescriptionIndex);
 
                     shared_ptr_ref<BTGattChar> characteristic_sref(characteristic); // new instance to be released into new jobject
-                    jobject jcharVal = env_->NewObject(clazz, clazz_ctor, characteristic_sref.release_to_jlong(), jservice,
+                    const jlong native_handle = characteristic_sref.release_to_jlong();
+                    WARN_PRINT("DBTGattService.getCharsImpl: NewObject begin char native %p exported handle 0x%llx: %s",
+                            characteristic.get(), (long long)native_handle, characteristic->toString().c_str());
+                    jobject jcharVal = env_->NewObject(clazz, clazz_ctor, native_handle, jservice,
                             characteristic->handle, jGattCharPropSet,
                             uuid, characteristic->value_handle,
                             characteristic->clientCharConfigIndex,
                             characteristic->userDescriptionIndex);
                     java_exception_check_and_throw(env_, E_FILE_LINE);
+                    WARN_PRINT("DBTGattService.getCharsImpl: NewObject returned %p for char native %p exported handle 0x%llx",
+                            jcharVal, characteristic.get(), (long long)native_handle);
                     if( nullptr == jcharVal ) {
                         ERR_PRINT("DBTGattService.getCharsImpl: NewObject returned null for char %s in %s",
                                 characteristic->toString().c_str(), _service->toString().c_str());
                     }
+                    WARN_PRINT("DBTGattService.getCharsImpl: checking Java char local ref %p for char native %p",
+                            jcharVal, characteristic.get());
                     JNIGlobalRef::check(jcharVal, E_FILE_LINE);
                     JavaAnonRef jCharRef = characteristic->getJavaObject(); // GlobalRef
+                    WARN_PRINT("DBTGattService.getCharsImpl: native char %p getJavaObject valid %d: %s",
+                            characteristic.get(), JavaGlobalObj::isValid(jCharRef), characteristic->toString().c_str());
                     if( !JavaGlobalObj::isValid(jCharRef) ) {
                         ERR_PRINT("DBTGattService.getCharsImpl: invalid Java char object after ctor: %s in %s",
                                 characteristic->toString().c_str(), _service->toString().c_str());
                     }
+                    WARN_PRINT("DBTGattService.getCharsImpl: checking Java char global ref for native %p",
+                            characteristic.get());
                     JavaGlobalObj::check(jCharRef, E_FILE_LINE);
                     env_->DeleteLocalRef(jGattCharPropSet);
                     env_->DeleteLocalRef(jcharVal);
-                    return JavaGlobalObj::GetObject(jCharRef);
+                    jobject res = JavaGlobalObj::GetObject(jCharRef);
+                    WARN_PRINT("DBTGattService.getCharsImpl: ctor end char native %p -> Java object %p",
+                            characteristic.get(), res);
+                    return res;
                 };
         jobject jres = convert_vector_sharedptr_to_jarraylist<jau::darray<std::shared_ptr<BTGattChar>>, BTGattChar>(
                 env, characteristics, _characteristicClazzCtorArgs.c_str(), ctor_char);
