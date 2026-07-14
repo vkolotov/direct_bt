@@ -482,7 +482,7 @@ namespace direct_bt {
                     if( nullptr != sda ) {
                         return *sda == characteristic;
                     } else {
-                        return true;
+                        return false;
                     }
                 }
             };
