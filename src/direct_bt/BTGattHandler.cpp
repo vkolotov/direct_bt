@@ -689,14 +689,16 @@ bool BTGattHandler::disconnect(const bool disconnect_device, const bool ioerr_ca
     bool expConn = true; // C++11, exp as value since C++20
     if( !is_connected.compare_exchange_strong(expConn, false) ) {
         // not connected
-        DBG_PRINT("GATTHandler::disconnect: Not connected path before join: disconnect_device %d, ioerr %d: %s, l2cap[%s], deviceConnected %d",
+        DBG_PRINT("GATTHandler::disconnect: Not connected path before l2cap close: disconnect_device %d, ioerr %d: %s, l2cap[%s], deviceConnected %d",
                   disconnect_device, ioerr_cause, toString().c_str(), l2cap.getStateString().c_str(),
                   device->getConnected());
+        l2cap.close(); // owned by BTDevice; closes/interrupts before waiting for the reader.
+        DBG_PRINT("GATTHandler::disconnect: Not connected path after l2cap close before join: %s, l2cap[%s], deviceConnected %d",
+                  toString().c_str(), l2cap.getStateString().c_str(), device->getConnected());
         const bool l2cap_service_stopped = l2cap_reader_service.join(); // [data] race: wait until disconnecting thread has stopped service
-        DBG_PRINT("GATTHandler::disconnect: Not connected path after join before close: stopped %d: %s, l2cap[%s], deviceConnected %d",
+        DBG_PRINT("GATTHandler::disconnect: Not connected path after join: stopped %d: %s, l2cap[%s], deviceConnected %d",
                   l2cap_service_stopped, toString().c_str(), l2cap.getStateString().c_str(),
                   device->getConnected());
-        l2cap.close(); // owned by BTDevice.
         DBG_PRINT("GATTHandler::disconnect: Not connected: disconnect_device %d, ioerr %d: GattHandler[%s], l2cap[%s], stopped %d: %s",
                   disconnect_device, ioerr_cause, getStateString().c_str(), l2cap.getStateString().c_str(),
                   l2cap_service_stopped, toString().c_str());
@@ -706,14 +708,13 @@ bool BTGattHandler::disconnect(const bool disconnect_device, const bool ioerr_ca
     }
 
     PERF3_TS_TD("GATTHandler::disconnect.1");
-    DBG_PRINT("GATTHandler::disconnect: Connected path before service stop: %s, l2cap[%s], deviceConnected %d",
+    DBG_PRINT("GATTHandler::disconnect: Connected path before l2cap close: %s, l2cap[%s], deviceConnected %d",
+              toString().c_str(), l2cap.getStateString().c_str(), device->getConnected());
+    l2cap.close(); // owned by BTDevice; closes/interrupts before waiting for the reader.
+    DBG_PRINT("GATTHandler::disconnect: Connected path after l2cap close before service stop: %s, l2cap[%s], deviceConnected %d",
               toString().c_str(), l2cap.getStateString().c_str(), device->getConnected());
     const bool l2cap_service_stop_res = l2cap_reader_service.stop();
-    DBG_PRINT("GATTHandler::disconnect: Connected path after service stop before close: stopped %d: %s, l2cap[%s], deviceConnected %d",
-              l2cap_service_stop_res, toString().c_str(), l2cap.getStateString().c_str(),
-              device->getConnected());
-    l2cap.close(); // owned by BTDevice.
-    DBG_PRINT("GATTHandler::disconnect: Connected path after l2cap close: stopped %d: %s, l2cap[%s], deviceConnected %d",
+    DBG_PRINT("GATTHandler::disconnect: Connected path after service stop: stopped %d: %s, l2cap[%s], deviceConnected %d",
               l2cap_service_stop_res, toString().c_str(), l2cap.getStateString().c_str(),
               device->getConnected());
     PERF3_TS_TD("GATTHandler::disconnect.X");
