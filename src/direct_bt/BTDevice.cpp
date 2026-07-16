@@ -2294,6 +2294,19 @@ BTDevice::GattServiceList_t BTDevice::getGattServices() noexcept {
     return result; // return the copy, copy elision shall be used
 }
 
+void BTDevice::setGattCacheMode(const GattCacheMode mode) noexcept {
+    // Same key the seed cache uses (BTGattHandler::deviceString), so the policy survives this instance.
+    BTGattHandler::setGattCacheMode(addressAndType.address.toString(), mode);
+}
+
+GattCacheMode BTDevice::getGattCacheMode() const noexcept {
+    return BTGattHandler::getGattCacheMode(addressAndType.address.toString());
+}
+
+void BTDevice::clearGattCache() noexcept {
+    BTGattHandler::clearGattCache(addressAndType.address.toString());
+}
+
 std::shared_ptr<GattGenericAccessSvc> BTDevice::getGattGenericAccess() noexcept {
     std::shared_ptr<BTGattHandler> gh = getGattHandler();
     if( nullptr == gh ) {
