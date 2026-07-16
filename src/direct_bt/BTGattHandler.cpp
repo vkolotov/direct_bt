@@ -980,9 +980,32 @@ namespace {
         const std::lock_guard<std::mutex> lock(gattSeedLock());
         gattSeedMap().erase(key);
     }
+    std::unordered_map<std::string, GattCacheMode>& gattSeedModeMap() noexcept {
+        static std::unordered_map<std::string, GattCacheMode> map;
+        return map;
+    }
 
     /** The GATT Database Hash characteristic (BT Core Spec v5.2: Vol 3, Part G GATT: 7.3). */
     const jau::uuid16_t _DATABASE_HASH = jau::uuid16_t(0x2b2a);
+}
+
+void BTGattHandler::setGattCacheMode(const std::string& deviceKey, const GattCacheMode mode) noexcept {
+    const std::lock_guard<std::mutex> lock(gattSeedLock());
+    if( GattCacheMode::AUTO == mode ) {
+        gattSeedModeMap().erase(deviceKey); // AUTO is the implicit default; keep the map minimal
+    } else {
+        gattSeedModeMap()[deviceKey] = mode;
+    }
+}
+
+GattCacheMode BTGattHandler::getGattCacheMode(const std::string& deviceKey) noexcept {
+    const std::lock_guard<std::mutex> lock(gattSeedLock());
+    auto it = gattSeedModeMap().find(deviceKey);
+    return it == gattSeedModeMap().end() ? GattCacheMode::AUTO : it->second;
+}
+
+void BTGattHandler::clearGattCache(const std::string& deviceKey) noexcept {
+    gattSeedErase(deviceKey);
 }
 
 bool BTGattHandler::readDatabaseHash(uint8_t out[16]) noexcept {
@@ -1004,12 +1027,14 @@ bool BTGattHandler::readDatabaseHash(uint8_t out[16]) noexcept {
     return true;
 }
 
-bool BTGattHandler::applyGattSeed(const std::shared_ptr<BTGattHandler>& shared_this) noexcept {
+bool BTGattHandler::applyGattSeed(const std::shared_ptr<BTGattHandler>& shared_this, const bool trust) noexcept {
     std::shared_ptr<const GattSeed> seed = gattSeedLookup(deviceString);
     if( nullptr == seed || seed->services.empty() ) {
         return false;
     }
-    if( seed->has_hash ) {
+    if( trust ) {
+        // GattCacheMode::TRUST: no validation round trips at all; rebuild below.
+    } else if( seed->has_hash ) {
         // Hash validation: ONE round trip. A mismatch means the peer's firmware changed the layout.
         uint8_t hash[16];
         if( !readDatabaseHash(hash) || 0 != memcmp(hash, seed->db_hash, 16) ) {
@@ -1073,7 +1098,7 @@ bool BTGattHandler::applyGattSeed(const std::shared_ptr<BTGattHandler>& shared_t
                 services.size(), toString().c_str());
         return true;
     }
-    // Hash matched: rebuild everything from the seed with zero further radio traffic.
+    // Trusted or hash matched: rebuild everything from the seed with zero further radio traffic.
     for(const GattSeedService& row : seed->services) {
         BTGattServiceRef svc = std::make_shared<BTGattService>(shared_this, true, row.handle, row.end_handle,
                 row.type->clone());
@@ -1094,8 +1119,8 @@ bool BTGattHandler::applyGattSeed(const std::shared_ptr<BTGattHandler>& shared_t
         }
         services.push_back(svc);
     }
-    DBG_PRINT("GATTHandler::applyGattSeed: %zu services hash-validated from seed: %s",
-            services.size(), toString().c_str());
+    DBG_PRINT("GATTHandler::applyGattSeed: %zu services %s from seed: %s",
+            services.size(), trust ? "trusted" : "hash-validated", toString().c_str());
     return true;
 }
 
@@ -1160,9 +1185,10 @@ bool BTGattHandler::initClientGatt(const std::shared_ptr<BTGattHandler>& shared_
     services.clear();
 
     // Seed-cache fast path: validate the previously captured layout (hash: 1 round trip; declarations:
-    // a few) and rebuild from it instead of the full walk. getGenericAccess() below reads live values
-    // through the rebuilt handles, doubling as an end-to-end verification of the seed.
-    if( applyGattSeed(shared_this) ) {
+    // a few; TRUST: none) and rebuild from it instead of the full walk. getGenericAccess() below reads
+    // live values through the rebuilt handles, doubling as an end-to-end verification of the seed.
+    const GattCacheMode cacheMode = getGattCacheMode(deviceString);
+    if( GattCacheMode::OFF != cacheMode && applyGattSeed(shared_this, GattCacheMode::TRUST == cacheMode) ) {
         genericAccess = getGenericAccess(services);
         if( nullptr != genericAccess ) {
             DBG_PRINT("GATTHandler::initClientGatt: End: %zu services from seed cache: %s, %s",
@@ -1196,7 +1222,9 @@ bool BTGattHandler::initClientGatt(const std::shared_ptr<BTGattHandler>& shared_
         disconnect(true /* disconnect_device */, false /* ioerr_cause */);
         return false;
     }
-    storeGattSeed(); // completed walk: capture the layout for the next connection's fast path
+    if( GattCacheMode::OFF != cacheMode ) {
+        storeGattSeed(); // completed walk: capture the layout for the next connection's fast path
+    }
     DBG_PRINT("GATTHandler::initClientGatt: End: %zu services discovered: %s, %s",
             services.size(), genericAccess->toString().c_str(), toString().c_str());
     return true;

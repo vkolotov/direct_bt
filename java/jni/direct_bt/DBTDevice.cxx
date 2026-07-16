@@ -1086,6 +1086,46 @@ jboolean Java_jau_direct_1bt_DBTDevice_sendIndication(JNIEnv *env, jobject obj, 
     return JNI_FALSE;
 }
 
+void Java_jau_direct_1bt_DBTDevice_setGattCacheModeImpl(JNIEnv *env, jobject obj, jbyte jmode)
+{
+    try {
+        shared_ptr_ref<BTDevice> device(env, obj); // hold until done
+        JavaAnonRef device_java = device->getJavaObject(); // hold until done!
+        JavaGlobalObj::check(device_java, E_FILE_LINE);
+
+        device->setGattCacheMode( static_cast<GattCacheMode>(jmode) );
+    } catch(...) {
+        rethrow_and_raise_java_exception(env);
+    }
+}
+
+jbyte Java_jau_direct_1bt_DBTDevice_getGattCacheModeImpl(JNIEnv *env, jobject obj)
+{
+    try {
+        shared_ptr_ref<BTDevice> device(env, obj); // hold until done
+        JavaAnonRef device_java = device->getJavaObject(); // hold until done!
+        JavaGlobalObj::check(device_java, E_FILE_LINE);
+
+        return static_cast<jbyte>( number( device->getGattCacheMode() ) );
+    } catch(...) {
+        rethrow_and_raise_java_exception(env);
+    }
+    return static_cast<jbyte>( number( GattCacheMode::AUTO ) );
+}
+
+void Java_jau_direct_1bt_DBTDevice_clearGattCache(JNIEnv *env, jobject obj)
+{
+    try {
+        shared_ptr_ref<BTDevice> device(env, obj); // hold until done
+        JavaAnonRef device_java = device->getJavaObject(); // hold until done!
+        JavaGlobalObj::check(device_java, E_FILE_LINE);
+
+        device->clearGattCache();
+    } catch(...) {
+        rethrow_and_raise_java_exception(env);
+    }
+}
+
 jboolean Java_jau_direct_1bt_DBTDevice_pingGATTImpl(JNIEnv *env, jobject obj)
 {
     try {

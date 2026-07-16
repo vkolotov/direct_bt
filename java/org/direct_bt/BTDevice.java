@@ -674,6 +674,34 @@ public interface BTDevice extends BTObject
     List<BTGattService> getGattServices();
 
     /**
+     * Set this device's GATT layout seed-cache validation policy, effective from the next
+     * GATT initialization (see {@link #getGattServices()}). {@link GattCacheMode#AUTO} is the default.
+     * <p>
+     * The policy is keyed by the device's address and shared with the session-scoped seed cache,
+     * hence it survives this BTDevice instance.
+     * </p>
+     * @see GattCacheMode
+     * @see #clearGattCache()
+     * @since 3.3.5
+     */
+    void setGattCacheMode(final GattCacheMode mode);
+
+    /**
+     * Return this device's GATT layout seed-cache validation policy,
+     * {@link GattCacheMode#AUTO} unless set otherwise.
+     * @since 3.3.5
+     */
+    GattCacheMode getGattCacheMode();
+
+    /**
+     * Drop this device's cached GATT layout seed, forcing a full discovery on the next
+     * GATT initialization. The configured {@link GattCacheMode} is unaffected.
+     * @see #setGattCacheMode(GattCacheMode)
+     * @since 3.3.5
+     */
+    void clearGattCache();
+
+    /**
      * Find a {@link BTGattService} by its service_uuid.
      *
      * It will check objects of this connected device.

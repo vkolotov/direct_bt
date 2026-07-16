@@ -42,6 +42,7 @@ import org.direct_bt.BTGattChar;
 import org.direct_bt.BTGattService;
 import org.direct_bt.BTRole;
 import org.direct_bt.EInfoReport;
+import org.direct_bt.GattCacheMode;
 import org.direct_bt.BTGattCharListener;
 import org.direct_bt.HCIStatusCode;
 import org.direct_bt.LE_PHYs;
@@ -640,6 +641,21 @@ public class DBTDevice extends DBTObject implements BTDevice
         return new ArrayList<BTGattService>();
     }
     private native List<BTGattService> getGattServicesImpl();
+
+    @Override
+    public void setGattCacheMode(final GattCacheMode mode) {
+        setGattCacheModeImpl(mode.value);
+    }
+    private native void setGattCacheModeImpl(final byte mode);
+
+    @Override
+    public GattCacheMode getGattCacheMode() {
+        return GattCacheMode.get(getGattCacheModeImpl());
+    }
+    private native byte getGattCacheModeImpl();
+
+    @Override
+    public native void clearGattCache();
 
     @Override
     public native boolean sendNotification(final short char_value_handle, final byte[] value);

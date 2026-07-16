@@ -1207,6 +1207,27 @@ namespace direct_bt {
             GattServiceList_t getGattServices() noexcept;
 
             /**
+             * Set this device's GATT layout seed-cache validation policy, effective from the next
+             * GATT initialization (see getGattServices()). GattCacheMode::AUTO is the default.
+             *
+             * The policy is keyed by the device's address and shared with the session-scoped seed cache,
+             * hence it survives this BTDevice instance.
+             * @see GattCacheMode
+             * @see clearGattCache()
+             */
+            void setGattCacheMode(const GattCacheMode mode) noexcept;
+
+            /** Return this device's GATT layout seed-cache validation policy, GattCacheMode::AUTO unless set. */
+            GattCacheMode getGattCacheMode() const noexcept;
+
+            /**
+             * Drop this device's cached GATT layout seed, forcing a full discovery on the next
+             * GATT initialization. The configured GattCacheMode is unaffected.
+             * @see setGattCacheMode()
+             */
+            void clearGattCache() noexcept;
+
+            /**
              * Returns the shared GenericAccess instance, retrieved by getGattServices() or nullptr if not available.
              *
              * @return

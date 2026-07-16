@@ -146,6 +146,29 @@ namespace direct_bt {
     };
 
     /**
+     * Validation policy for the GATT layout seed cache, settable per device.
+     * @see BTGattHandler::setGattCacheMode()
+     * @see BTDevice::setGattCacheMode()
+     */
+    enum class GattCacheMode : uint8_t {
+        /** Never apply nor store the seed cache: full discovery on every connection. */
+        OFF   = 0,
+        /**
+         * Validate the seed before use (default): Database Hash (0x2B2A) in one round trip when the
+         * peer exposes it, otherwise a service/characteristic declaration re-read and compare.
+         */
+        AUTO  = 1,
+        /**
+         * Apply the seed without any validation round trips. Unsafe across peer GATT layout changes:
+         * a changed layout can reuse handle numbers, silently addressing the wrong attributes.
+         */
+        TRUST = 2
+    };
+    constexpr uint8_t number(const GattCacheMode rhs) noexcept {
+        return static_cast<uint8_t>(rhs);
+    }
+
+    /**
      * A thread safe GATT handler associated to one device via one L2CAP connection.
      *
      * Implementation utilizes a lock free ringbuffer receiving data within its separate thread.
@@ -567,7 +590,7 @@ namespace direct_bt {
              * Plain DATA is cached, never live objects — every connection constructs new instances.
              */
             bool readDatabaseHash(uint8_t out[16]) noexcept;
-            bool applyGattSeed(const std::shared_ptr<BTGattHandler>& shared_this) noexcept;
+            bool applyGattSeed(const std::shared_ptr<BTGattHandler>& shared_this, const bool trust) noexcept;
             void storeGattSeed() noexcept;
 
             /**
@@ -609,6 +632,24 @@ namespace direct_bt {
 
             BTDeviceRef getDeviceUnchecked() const noexcept { return wbr_device.lock(); }
             BTDeviceRef getDeviceChecked() const;
+
+            /**
+             * Set the seed-cache validation policy for the given device key (the device's BLE address string).
+             * GattCacheMode::AUTO is the default for every device.
+             * @see GattCacheMode
+             * @see BTDevice::setGattCacheMode()
+             */
+            static void setGattCacheMode(const std::string& deviceKey, const GattCacheMode mode) noexcept;
+
+            /** Return the seed-cache validation policy for the given device key, GattCacheMode::AUTO unless set. */
+            static GattCacheMode getGattCacheMode(const std::string& deviceKey) noexcept;
+
+            /**
+             * Drop the cached GATT layout seed for the given device key,
+             * forcing a full discovery on the next connection.
+             * @see BTDevice::clearGattCache()
+             */
+            static void clearGattCache(const std::string& deviceKey) noexcept;
 
             /**
              * Return the local GATTRole to the remote BTDevice.
