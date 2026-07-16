@@ -28,6 +28,9 @@
 #include <memory>
 #include <cstdint>
 #include <cstdio>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 #include  <algorithm>
 
@@ -901,6 +904,204 @@ BTGattCharRef BTGattHandler::findCharacterisicsByValueHandle(const BTGattService
     return nullptr;
 }
 
+// ---- GATT layout seed cache -------------------------------------------------------------------------
+// Session-scoped (process lifetime), keyed by device address. Stores plain DATA (handles, UUIDs,
+// properties) captured from a COMPLETED discovery; never live BTGatt* objects — fresh objects are
+// constructed per connection, exactly as discovery would construct them. Deliberately not persisted:
+// a process restart re-discovers once, which self-limits staleness to one process lifetime.
+// See openhab-instructions docs/directbt-gatt-cache-design-2026-07-17.md.
+namespace {
+    struct GattSeedDesc {
+        std::shared_ptr<const jau::uuid_t> type;
+        uint16_t handle;
+    };
+    struct GattSeedChar {
+        uint16_t handle;
+        uint8_t properties;
+        uint16_t value_handle;
+        std::shared_ptr<const jau::uuid_t> value_type;
+        std::vector<GattSeedDesc> descriptors;
+    };
+    struct GattSeedService {
+        uint16_t handle;
+        uint16_t end_handle;
+        std::shared_ptr<const jau::uuid_t> type;
+        std::vector<GattSeedChar> characteristics;
+    };
+    struct GattSeed {
+        bool has_hash = false;
+        uint8_t db_hash[16] = { 0 };
+        std::vector<GattSeedService> services;
+    };
+
+    std::mutex& gattSeedLock() noexcept {
+        static std::mutex lock;
+        return lock;
+    }
+    std::unordered_map<std::string, std::shared_ptr<const GattSeed>>& gattSeedMap() noexcept {
+        static std::unordered_map<std::string, std::shared_ptr<const GattSeed>> map;
+        return map;
+    }
+    std::shared_ptr<const GattSeed> gattSeedLookup(const std::string& key) noexcept {
+        const std::lock_guard<std::mutex> lock(gattSeedLock());
+        auto it = gattSeedMap().find(key);
+        return it == gattSeedMap().end() ? nullptr : it->second;
+    }
+    void gattSeedStore(const std::string& key, std::shared_ptr<const GattSeed> seed) noexcept {
+        const std::lock_guard<std::mutex> lock(gattSeedLock());
+        gattSeedMap()[key] = std::move(seed);
+    }
+    void gattSeedErase(const std::string& key) noexcept {
+        const std::lock_guard<std::mutex> lock(gattSeedLock());
+        gattSeedMap().erase(key);
+    }
+
+    /** The GATT Database Hash characteristic (BT Core Spec v5.2: Vol 3, Part G GATT: 7.3). */
+    const jau::uuid16_t _DATABASE_HASH = jau::uuid16_t(0x2b2a);
+}
+
+bool BTGattHandler::readDatabaseHash(uint8_t out[16]) noexcept {
+    // Read By Type over the full range: needs NO cached handles, so validation has no chicken-and-egg.
+    const std::lock_guard<std::recursive_mutex> lock(mtx_command);
+    const AttReadByNTypeReq req(false /* group */, 0x0001, 0xffff, _DATABASE_HASH);
+    std::unique_ptr<const AttPDUMsg> pdu = sendWithReply(req, read_cmd_reply_timeout);
+    if( nullptr == pdu || pdu->getOpcode() != AttPDUMsg::Opcode::READ_BY_TYPE_RSP ) {
+        return false; // no reply, ERROR_RSP (peer has no 0x2B2A), or unexpected
+    }
+    const AttReadByTypeRsp * p = static_cast<const AttReadByTypeRsp*>(pdu.get());
+    if( p->getElementCount() < 1 || p->getElementSize() != 2 + 16 ) {
+        return false;
+    }
+    const size_type off = p->getElementPDUOffset(0) + 2; // skip the handle, take the 16-byte hash value
+    for(int i = 0; i < 16; ++i) {
+        out[i] = p->pdu.get_uint8(off + (size_type)i);
+    }
+    return true;
+}
+
+bool BTGattHandler::applyGattSeed(const std::shared_ptr<BTGattHandler>& shared_this) noexcept {
+    std::shared_ptr<const GattSeed> seed = gattSeedLookup(deviceString);
+    if( nullptr == seed || seed->services.empty() ) {
+        return false;
+    }
+    if( seed->has_hash ) {
+        // Hash validation: ONE round trip. A mismatch means the peer's firmware changed the layout.
+        uint8_t hash[16];
+        if( !readDatabaseHash(hash) || 0 != memcmp(hash, seed->db_hash, 16) ) {
+            DBG_PRINT("GATTHandler::applyGattSeed: Database Hash absent/mismatch; invalidating seed: %s",
+                    toString().c_str());
+            gattSeedErase(deviceString);
+            return false;
+        }
+    } else {
+        // Declaration verification (peer exposes no Database Hash): re-read service and characteristic
+        // declarations — a few round trips, ~10% of a full walk (the walk's cost is descriptor discovery) —
+        // and require them to MATCH the seed. This positively verifies service/char identity for any peer;
+        // only descriptor placement is taken on trust (with invalid-handle evidence as the backstop).
+        // Blind reuse without this check is unsafe: a changed layout can reuse handle numbers for different
+        // characteristics, and stale handles would then succeed against the WRONG attributes.
+        jau::darray<BTGattServiceRef> fresh;
+        if( !discoverPrimaryServices(shared_this, fresh) || fresh.size() != seed->services.size() ) {
+            return false;
+        }
+        for(size_t s = 0; s < fresh.size(); ++s) {
+            BTGattServiceRef& svc = fresh[s];
+            const GattSeedService& row = seed->services[s];
+            if( svc->handle != row.handle || svc->end_handle != row.end_handle
+                    || !( *svc->type == *row.type ) || !discoverCharacteristics(svc) ) {
+                return false;
+            }
+            if( svc->characteristicList.size() != row.characteristics.size() ) {
+                return false;
+            }
+            for(size_t c = 0; c < svc->characteristicList.size(); ++c) {
+                const BTGattCharRef& ch = svc->characteristicList[c];
+                const GattSeedChar& crow = row.characteristics[c];
+                if( ch->handle != crow.handle || (uint8_t)ch->properties != crow.properties
+                        || ch->value_handle != crow.value_handle || !( *ch->value_type == *crow.value_type ) ) {
+                    return false;
+                }
+            }
+        }
+        // Verified: adopt the freshly discovered services/chars and only seed the descriptors below.
+        services.clear();
+        for(BTGattServiceRef& svc : fresh) {
+            services.push_back(svc);
+        }
+        for(size_t s = 0; s < services.size(); ++s) {
+            BTGattServiceRef& svc = services[s];
+            const GattSeedService& row = seed->services[s];
+            for(size_t c = 0; c < svc->characteristicList.size(); ++c) {
+                BTGattCharRef ch = svc->characteristicList[c];
+                for(const GattSeedDesc& drow : row.characteristics[c].descriptors) {
+                    std::shared_ptr<BTGattDesc> cd( std::make_shared<BTGattDesc>(ch, drow.type->clone(), drow.handle) );
+                    if( cd->isClientCharConfig() ) {
+                        ch->clientCharConfigIndex = (BTGattChar::ssize_type) ch->descriptorList.size();
+                    } else if( cd->isUserDescription() ) {
+                        ch->userDescriptionIndex = (BTGattChar::ssize_type) ch->descriptorList.size();
+                    }
+                    ch->descriptorList.push_back(cd);
+                }
+            }
+        }
+        DBG_PRINT("GATTHandler::applyGattSeed: %zu services declaration-verified from seed: %s",
+                services.size(), toString().c_str());
+        return true;
+    }
+    // Hash matched: rebuild everything from the seed with zero further radio traffic.
+    for(const GattSeedService& row : seed->services) {
+        BTGattServiceRef svc = std::make_shared<BTGattService>(shared_this, true, row.handle, row.end_handle,
+                row.type->clone());
+        for(const GattSeedChar& crow : row.characteristics) {
+            BTGattCharRef ch = std::make_shared<BTGattChar>(svc,
+                    crow.handle, static_cast<BTGattChar::PropertyBitVal>(crow.properties),
+                    crow.value_handle, crow.value_type->clone());
+            for(const GattSeedDesc& drow : crow.descriptors) {
+                std::shared_ptr<BTGattDesc> cd( std::make_shared<BTGattDesc>(ch, drow.type->clone(), drow.handle) );
+                if( cd->isClientCharConfig() ) {
+                    ch->clientCharConfigIndex = (BTGattChar::ssize_type) ch->descriptorList.size();
+                } else if( cd->isUserDescription() ) {
+                    ch->userDescriptionIndex = (BTGattChar::ssize_type) ch->descriptorList.size();
+                }
+                ch->descriptorList.push_back(cd);
+            }
+            svc->characteristicList.push_back(ch);
+        }
+        services.push_back(svc);
+    }
+    DBG_PRINT("GATTHandler::applyGattSeed: %zu services hash-validated from seed: %s",
+            services.size(), toString().c_str());
+    return true;
+}
+
+void BTGattHandler::storeGattSeed() noexcept {
+    // Called only after a COMPLETED discovery; partial layouts must never seed the cache.
+    auto seed = std::make_shared<GattSeed>();
+    for(const BTGattServiceRef& svc : services) {
+        GattSeedService row;
+        row.handle = svc->handle;
+        row.end_handle = svc->end_handle;
+        row.type = std::shared_ptr<const jau::uuid_t>(svc->type->clone());
+        for(const BTGattCharRef& ch : svc->characteristicList) {
+            GattSeedChar crow;
+            crow.handle = ch->handle;
+            crow.properties = (uint8_t) ch->properties;
+            crow.value_handle = ch->value_handle;
+            crow.value_type = std::shared_ptr<const jau::uuid_t>(ch->value_type->clone());
+            for(const BTGattDescRef& cd : ch->descriptorList) {
+                crow.descriptors.push_back( GattSeedDesc { std::shared_ptr<const jau::uuid_t>(cd->type->clone()),
+                        cd->handle } );
+            }
+            row.characteristics.push_back(std::move(crow));
+        }
+        seed->services.push_back(std::move(row));
+    }
+    seed->has_hash = readDatabaseHash(seed->db_hash); // best effort; absent -> declaration-verify next time
+    DBG_PRINT("GATTHandler::storeGattSeed: %zu services captured (hash %d): %s",
+            seed->services.size(), seed->has_hash, toString().c_str());
+    gattSeedStore(deviceString, std::move(seed));
+}
+
 bool BTGattHandler::initClientGatt(const std::shared_ptr<BTGattHandler>& shared_this, bool& already_init) noexcept {
     const std::lock_guard<std::recursive_mutex> lock(mtx_command);
     already_init = clientMTUExchanged && services.size() > 0 && nullptr != genericAccess;
@@ -933,6 +1134,22 @@ bool BTGattHandler::initClientGatt(const std::shared_ptr<BTGattHandler>& shared_
     }
     services.clear();
 
+    // Seed-cache fast path: validate the previously captured layout (hash: 1 round trip; declarations:
+    // a few) and rebuild from it instead of the full walk. getGenericAccess() below reads live values
+    // through the rebuilt handles, doubling as an end-to-end verification of the seed.
+    if( applyGattSeed(shared_this) ) {
+        genericAccess = getGenericAccess(services);
+        if( nullptr != genericAccess ) {
+            DBG_PRINT("GATTHandler::initClientGatt: End: %zu services from seed cache: %s, %s",
+                    services.size(), genericAccess->toString().c_str(), toString().c_str());
+            return true;
+        }
+        WARN_PRINT("GATTHandler::initClientGatt: seed rebuild yielded no GenericAccess; invalidating seed: %s",
+                toString().c_str());
+        gattSeedErase(deviceString);
+        services.clear();
+    }
+
     // Service discovery may consume 500ms - 2000ms, depending on bandwidth
     DBG_PRINT("GATTHandler::initClientGatt: Local GATT Client: Service Discovery Start: %s", toString().c_str());
     if( !discoverCompletePrimaryServices(shared_this) ) {
@@ -954,6 +1171,7 @@ bool BTGattHandler::initClientGatt(const std::shared_ptr<BTGattHandler>& shared_
         disconnect(true /* disconnect_device */, false /* ioerr_cause */);
         return false;
     }
+    storeGattSeed(); // completed walk: capture the layout for the next connection's fast path
     DBG_PRINT("GATTHandler::initClientGatt: End: %zu services discovered: %s, %s",
             services.size(), genericAccess->toString().c_str(), toString().c_str());
     return true;

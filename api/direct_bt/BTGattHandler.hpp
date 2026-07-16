@@ -560,6 +560,17 @@ namespace direct_bt {
             bool discoverDescriptors(BTGattServiceRef & service) noexcept;
 
             /**
+             * GATT layout seed cache (session-scoped, process lifetime, keyed by device address):
+             * a completed discovery captures a passive handle/UUID table; the next connection validates it
+             * cheaply (Database Hash 0x2B2A in one round trip when the peer exposes it, otherwise a
+             * declaration re-read/compare) and rebuilds fresh GATT objects from it, skipping the full walk.
+             * Plain DATA is cached, never live objects — every connection constructs new instances.
+             */
+            bool readDatabaseHash(uint8_t out[16]) noexcept;
+            bool applyGattSeed(const std::shared_ptr<BTGattHandler>& shared_this) noexcept;
+            void storeGattSeed() noexcept;
+
+            /**
              * Discover all primary services _and_ all its characteristics declarations
              * including their client config.
              * <p>
