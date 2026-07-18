@@ -192,10 +192,13 @@ namespace direct_bt {
                     BDAddressAndType visibleAddressAndType; // immutable
                     BDAddressAndType addressAndType; // mutable
                     uint16_t handle; // mutable
+                    uint64_t ts_attempt;
+                    uint64_t ts_connected;
 
                 public:
                     HCIConnection(const BDAddressAndType& addressAndType_, const uint16_t handle_)
-                    : visibleAddressAndType(addressAndType_), addressAndType(addressAndType_), handle(handle_) {}
+                    : visibleAddressAndType(addressAndType_), addressAndType(addressAndType_), handle(handle_),
+                      ts_attempt(jau::getCurrentMilliseconds()), ts_connected(0 != handle_ ? ts_attempt : 0) {}
 
                     HCIConnection(const HCIConnection &o) = default;
                     HCIConnection(HCIConnection &&o) = default;
@@ -208,7 +211,15 @@ namespace direct_bt {
 
                     uint16_t getHandle() const { return handle; }
 
-                    void setHandle(uint16_t newHandle) { handle = newHandle; }
+                    void setHandle(uint16_t newHandle) {
+                        handle = newHandle;
+                        if( 0 != newHandle && 0 == ts_connected ) {
+                            ts_connected = jau::getCurrentMilliseconds();
+                        }
+                    }
+
+                    uint64_t getAttemptTimestamp() const noexcept { return ts_attempt; }
+                    uint64_t getConnectedTimestamp() const noexcept { return ts_connected; }
 
                     bool equals(const BDAddressAndType & other) const
                     { return addressAndType == other || visibleAddressAndType == other; }

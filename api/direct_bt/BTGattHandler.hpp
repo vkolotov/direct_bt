@@ -486,6 +486,9 @@ namespace direct_bt {
 
             jau::service_runner l2cap_reader_service;
             jau::ringbuffer<std::unique_ptr<const AttPDUMsg>, jau::nsize_t> attPDURing;
+            std::atomic<uint64_t> last_rx_timestamp;
+            std::atomic<uint64_t> pending_reply_since;
+            std::atomic<uint8_t> pending_reply_opcode;
 
             jau::relaxed_atomic_uint16 serverMTU; // set in initClientGatt()
             jau::relaxed_atomic_uint16 usedMTU; // concurrent use in initClientGatt(set), send and l2capReaderThreadImpl

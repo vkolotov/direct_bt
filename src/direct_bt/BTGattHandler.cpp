@@ -428,6 +428,7 @@ void BTGattHandler::l2capReaderWork(jau::service_runner& sr) noexcept {
 
     len = l2cap.read(rbuffer.get_wptr(), rbuffer.size());
     if( 0 < len ) {
+        last_rx_timestamp.store(jau::getCurrentMilliseconds());
         std::unique_ptr<const AttPDUMsg> attPDU = AttPDUMsg::getSpecialized(rbuffer.get_ptr(), static_cast<jau::nsize_t>(len));
         COND_PRINT(env.DEBUG_DATA, "GATTHandler::reader: Got %s", attPDU->toString().c_str());
 
@@ -611,6 +612,7 @@ BTGattHandler::BTGattHandler(const BTDeviceRef &device, L2CAPClient& l2cap_att, 
                        jau::service_runner::Callback() /* init */,
                        jau::bind_member(this, &BTGattHandler::l2capReaderEndLocked)),
   attPDURing(env.ATTPDU_RING_CAPACITY),
+  last_rx_timestamp(jau::getCurrentMilliseconds()), pending_reply_since(0), pending_reply_opcode(0),
   serverMTU(number(Defaults::MIN_ATT_MTU)), usedMTU(number(Defaults::MIN_ATT_MTU)), clientMTUExchanged(false),
   gattServerData( device->getAdapter().getGATTServerData() ),
   gattServerHandler( selectGattServerHandler(*this, gattServerData) )
@@ -695,6 +697,14 @@ bool BTGattHandler::disconnect(const bool disconnect_device, const bool ioerr_ca
         DBG_PRINT("GATTHandler::disconnect: Not connected path before l2cap close: disconnect_device %d, ioerr %d: %s, l2cap[%s], deviceConnected %d",
                   disconnect_device, ioerr_cause, toString().c_str(), l2cap.getStateString().c_str(),
                   device->getConnected());
+        const uint64_t pending_since = pending_reply_since.load();
+        if( 0 != pending_since ) {
+            const uint64_t now = jau::getCurrentMilliseconds();
+            WARN_PRINT("BTDIAG disconnect cancelling ATT opcode 0x%02x after %" PRIu64 " ms (not-connected path): %s",
+                       pending_reply_opcode.load(), now >= pending_since ? now - pending_since : 0,
+                       deviceString.c_str());
+        }
+        attPDURing.interruptReader(); // cancel a synchronous ATT wait before taking mtx_command
         l2cap.close(); // owned by BTDevice; closes/interrupts before waiting for the reader.
         DBG_PRINT("GATTHandler::disconnect: Not connected path after l2cap close before join: %s, l2cap[%s], deviceConnected %d",
                   toString().c_str(), l2cap.getStateString().c_str(), device->getConnected());
@@ -713,6 +723,14 @@ bool BTGattHandler::disconnect(const bool disconnect_device, const bool ioerr_ca
     PERF3_TS_TD("GATTHandler::disconnect.1");
     DBG_PRINT("GATTHandler::disconnect: Connected path before l2cap close: %s, l2cap[%s], deviceConnected %d",
               toString().c_str(), l2cap.getStateString().c_str(), device->getConnected());
+    const uint64_t pending_since = pending_reply_since.load();
+    if( 0 != pending_since ) {
+        const uint64_t now = jau::getCurrentMilliseconds();
+        WARN_PRINT("BTDIAG disconnect cancelling ATT opcode 0x%02x after %" PRIu64 " ms: %s",
+                   pending_reply_opcode.load(), now >= pending_since ? now - pending_since : 0,
+                   deviceString.c_str());
+    }
+    attPDURing.interruptReader(); // cancel a synchronous ATT wait before taking mtx_command
     l2cap.close(); // owned by BTDevice; closes/interrupts before waiting for the reader.
     DBG_PRINT("GATTHandler::disconnect: Connected path after l2cap close before service stop: %s, l2cap[%s], deviceConnected %d",
               toString().c_str(), l2cap.getStateString().c_str(), device->getConnected());
@@ -792,15 +810,38 @@ std::unique_ptr<const AttPDUMsg> BTGattHandler::sendWithReply(const AttPDUMsg & 
     }
 
     // Ringbuffer read is thread safe
+    const uint64_t started = jau::getCurrentMilliseconds();
+    pending_reply_since.store(started);
+    pending_reply_opcode.store(static_cast<uint8_t>(msg.getOpcode()));
     std::unique_ptr<const AttPDUMsg> res;
-    if( !attPDURing.getBlocking(res, timeout) || nullptr == res ) {
+    bool timeout_occurred = false;
+    const bool received = attPDURing.getBlocking(res, timeout, timeout_occurred);
+    pending_reply_since.store(0);
+    pending_reply_opcode.store(0);
+    const uint64_t now = jau::getCurrentMilliseconds();
+    if( !received || nullptr == res ) {
+        BTDeviceRef device = getDeviceUnchecked();
+        const bool device_connected = nullptr != device && device->getConnected();
+        const uint64_t last_rx = last_rx_timestamp.load();
+        const uint64_t last_rx_age = now >= last_rx ? now - last_rx : 0;
+        if( !timeout_occurred || !is_connected.load() || !device_connected ) {
+            errno = ECANCELED;
+            WARN_PRINT("BTDIAG ATT wait cancelled after %" PRIu64 " ms: timeout %d, handlerConnected %d, deviceConnected %d, lastRxAge %" PRIu64 " ms, req %s to %s, l2cap[%s]",
+                       now - started, timeout_occurred, is_connected.load(), device_connected,
+                       last_rx_age, msg.toString().c_str(), toString().c_str(), l2cap.getStateString().c_str());
+            return nullptr;
+        }
         errno = ETIMEDOUT;
-        ERR_PRINT("GATTHandler::sendWithReply: nullptr result (timeout %" PRIi64 " ms): req %s to %s, l2cap[%s]",
-                  timeout.to_ms(), msg.toString().c_str(), toString().c_str(), l2cap.getStateString().c_str());
+        ERR_PRINT("GATTHandler::sendWithReply: nullptr result (timeout %" PRIi64 " ms, waited %" PRIu64 " ms, lastRxAge %" PRIu64 " ms): req %s to %s, l2cap[%s]",
+                  timeout.to_ms(), now - started, last_rx_age, msg.toString().c_str(), toString().c_str(), l2cap.getStateString().c_str());
         has_ioerror = true;
         disconnect(true /* disconnect_device */, true /* ioerr_cause */);
         return nullptr;
     }
+    const uint64_t last_rx = last_rx_timestamp.load();
+    DBG_PRINT("BTDIAG ATT reply: opcode 0x%02x -> 0x%02x in %" PRIu64 " ms, lastRxAge %" PRIu64 " ms, device %s",
+              static_cast<uint8_t>(msg.getOpcode()), static_cast<uint8_t>(res->getOpcode()), now - started,
+              now >= last_rx ? now - last_rx : 0, deviceString.c_str());
     return res;
 }
 
