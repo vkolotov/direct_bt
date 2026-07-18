@@ -235,8 +235,14 @@ std::unique_ptr<MgmtEvent> HCIHandler::translate(HCIEvent& ev) noexcept {
                 const HCIConnectionRef conn = addOrUpdateTrackerConnection(addressAndType, handle);
                 if( HCIStatusCode::SUCCESS == status ) {
                     advertisingEnabled = false;
+                    DBG_PRINT("BTDIAG connect-complete: dev_id %u, address %s, handle %s, attempt_ms %" PRIu64,
+                              dev_id, addressAndType.toString().c_str(), jau::to_hexstring(handle).c_str(),
+                              ev.getTimestamp() - conn->getAttemptTimestamp());
                     return std::make_unique<MgmtEvtDeviceConnected>(dev_id, addressAndType, handle);
                 } else {
+                    WARN_PRINT("BTDIAG connect-failed: dev_id %u, address %s, status 0x%02x (%s), attempt_ms %" PRIu64,
+                               dev_id, addressAndType.toString().c_str(), number(status), to_string(status).c_str(),
+                               ev.getTimestamp() - conn->getAttemptTimestamp());
                     removeTrackerConnection(conn);
                     return std::make_unique<MgmtEvtDeviceConnectFailed>(dev_id, addressAndType, status);
                 }
@@ -263,8 +269,14 @@ std::unique_ptr<MgmtEvent> HCIHandler::translate(HCIEvent& ev) noexcept {
                 const HCIConnectionRef conn = addOrUpdateTrackerConnection(addressAndType, handle);
                 if( HCIStatusCode::SUCCESS == status ) {
                     advertisingEnabled = false;
+                    DBG_PRINT("BTDIAG ext-connect-complete: dev_id %u, address %s, handle %s, attempt_ms %" PRIu64,
+                              dev_id, addressAndType.toString().c_str(), jau::to_hexstring(handle).c_str(),
+                              ev.getTimestamp() - conn->getAttemptTimestamp());
                     return std::make_unique<MgmtEvtDeviceConnected>(dev_id, addressAndType, handle);
                 } else {
+                    WARN_PRINT("BTDIAG ext-connect-failed: dev_id %u, address %s, status 0x%02x (%s), attempt_ms %" PRIu64,
+                               dev_id, addressAndType.toString().c_str(), number(status), to_string(status).c_str(),
+                               ev.getTimestamp() - conn->getAttemptTimestamp());
                     removeTrackerConnection(conn);
                     return std::make_unique<MgmtEvtDeviceConnectFailed>(dev_id, addressAndType, status);
                 }
@@ -280,9 +292,20 @@ std::unique_ptr<MgmtEvent> HCIHandler::translate(HCIEvent& ev) noexcept {
                 const LE_Features features = static_cast<LE_Features>(jau::get_uint64(ev_cc->features + 0, jau::lb_endian_t::little));
                 const HCIConnectionRef conn = findTrackerConnection(handle);
                 if( nullptr == conn ) {
-                    WARN_PRINT("dev_id %u:: LE_REMOTE_FEAT_COMPLETE: Not tracked conn_handle %s of %s",
-                            dev_id, jau::to_hexstring(handle).c_str(), ev.toString().c_str());
+                    WARN_PRINT("BTDIAG remote-features: dev_id %u, untracked handle %s, status 0x%02x (%s): %s",
+                            dev_id, jau::to_hexstring(handle).c_str(), number(status), to_string(status).c_str(),
+                            ev.toString().c_str());
                     return nullptr;
+                }
+                const uint64_t connected_ms = conn->getConnectedTimestamp();
+                const uint64_t elapsed_ms = 0 != connected_ms ? ev.getTimestamp() - connected_ms : 0;
+                if( HCIStatusCode::SUCCESS != status ) {
+                    WARN_PRINT("BTDIAG remote-features-failed: dev_id %u, address %s, handle %s, status 0x%02x (%s), connected_ms %" PRIu64,
+                               dev_id, conn->getAddressAndType().toString().c_str(), jau::to_hexstring(handle).c_str(),
+                               number(status), to_string(status).c_str(), elapsed_ms);
+                } else {
+                    DBG_PRINT("BTDIAG remote-features-complete: dev_id %u, address %s, handle %s, connected_ms %" PRIu64,
+                              dev_id, conn->getAddressAndType().toString().c_str(), jau::to_hexstring(handle).c_str(), elapsed_ms);
                 }
                 return std::make_unique<MgmtEvtHCILERemoteFeatures>(dev_id, conn->getAddressAndType(), status, features);
             }
@@ -359,6 +382,11 @@ std::unique_ptr<MgmtEvent> HCIHandler::translate(HCIEvent& ev) noexcept {
                             conn->toString().c_str(), ev.toString().c_str(), toString().c_str());
                 }
                 const HCIStatusCode hciRootReason = static_cast<HCIStatusCode>(ev_cc->reason);
+                const uint64_t connected_ms = conn->getConnectedTimestamp();
+                const uint64_t link_ms = 0 != connected_ms ? ev.getTimestamp() - connected_ms : 0;
+                DBG_PRINT("BTDIAG disconnect-complete: dev_id %u, address %s, handle %s, reason 0x%02x (%s), link_ms %" PRIu64,
+                          dev_id, conn->getAddressAndType().toString().c_str(), jau::to_hexstring(conn->getHandle()).c_str(),
+                          number(hciRootReason), to_string(hciRootReason).c_str(), link_ms);
                 return std::make_unique<MgmtEvtDeviceDisconnected>(dev_id, conn->getAddressAndType(), hciRootReason, conn->getHandle());
             }
         }
